@@ -1,0 +1,84 @@
+{:template "base"}
+<!doctype html>
+<html>
+  <head>
+    <title>{{title|title}}</title>
+    {:block script}
+    <script>
+    if (false) {
+      alert(2);
+    }
+    if (false) { alert(1); }
+    </script>
+    {/block}
+  </head>
+  <body>
+  {:comment}
+
+    {:tag}
+    {:inner}
+    {/:tag}
+
+    is equivalent to
+
+    {:tag}
+    {:inner}
+    {/inner}{/tag}
+
+    i.e tags are implictly closed when "appropriate".
+  {/comment}
+
+
+  {:block content}
+    {:let}
+      {:list v 1}
+      {:dict d a 1 b 2}
+      {:bool b d.a == v.1}
+      {:if b}
+        {{d.b}}
+      {:else}
+        {{d.a}}
+      {/if}
+    {/let}
+    {:for index value in array}
+      {:cycle color "blue" "red"}
+      {:comment}
+      the `color` variable will now alternate between "blue" and "red"
+      {/comment}
+      {{ color }}
+      {:if index|odd}
+        odd
+      {/if}
+      {:if index == array|length}
+        last
+      {/if}
+    {/for}
+    {:_}
+      Translate this message: {{message|title}}
+      {:plural my_counter}
+      Translate these {{my_counter}} messages: {{message|title}}
+    {/_}
+    {:leftbrace/}
+    {:rightbrace/}
+    {:cond}
+    {:when a == 1}
+      do 1
+    {:else}
+      do 2
+    {/cond}
+  {/block}
+  </body>
+</html>
+{/template}
+
+{:template "index" from "base"}
+  {:block content}
+    Override
+    {:comment}
+    This is a comment
+    {/comment}
+  {/block}
+{/template}
+
+
+

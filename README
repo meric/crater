@@ -1,0 +1,22 @@
+ABOUT
+
+Shared server and client templates
+
+Template Inheritance
+Looping
+Conditionals
+Filters
+gettext support
+Pre-compilation for client use
+
+STATUS
+Incomplete, only parser is done.
+
+TODO
+
+tests
+i18n
+line number with error reporting
+compiling to javascript to be included via browser
+python/ruby/etc wrapper for executing templates via v8
+

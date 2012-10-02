@@ -1,0 +1,290 @@
+#!/usr/local/bin/lua
+
+require("lapp.lapp")
+
+local args = lapp [[
+Compiles crater templates into functions written in target language,
+ -t,--target (default javascript)  Target language
+ crater <path> (path) path to template file
+]]
+
+if args.path then
+  local f = io.open(args.path, "r") 
+  if not f then
+    io.stderr:write(("File '%s' not found."):format(args.path))
+    os.exit()
+  end
+  text = f:read("*all")
+  f.close()
+else
+  text = io.read("*all")
+end
+
+function id(...)
+  return ...
+end
+
+--- Trim whitespaces from both ends of a string
+-- @param self The string to be trimmed.
+-- @return The trimmed string.
+function string:trim()
+  return self:gsub("^%s*(.-)%s*$", "%1")
+end
+
+Text = {} 
+Text.__index = Text
+setmetatable(Text, {__call = function(self, text)
+  return setmetatable({text = text}, Text)
+end, __tostring = function() return "TextTag_" end})
+
+function Text:append(text)
+  self.text = self.text .. text
+end
+
+function Text:__tostring()
+  return self.text
+end
+
+Tag = {} 
+Tag.__index = Tag
+setmetatable(Tag, {__call = function(self, text)
+  text = text:trim()
+  local Class = nil
+  local first = text:sub(1, 1)
+  if first == "/" then
+    Class = EndTag
+  elseif first == "{" then
+    Class = VariableTag
+  elseif first == ":" and text:sub(#text, #text) == "/" then
+    Class = BeginEndTag
+  elseif first == ":" then
+    Class = BeginTag
+  end
+  return Class(text)
+end})
+
+
+BeginTag = {}
+BeginTag.__index = BeginTag
+setmetatable(BeginTag, {__call = function(self, text)
+  local name, args = parsetag(text:sub(2, #text))
+  return setmetatable({name = name, args = args, children = {}}, BeginTag)
+end, __tostring = function() return "BeginTag" end})
+
+function BeginTag:__tostring()
+  return "{:"..self.name.." "..table.concat(self.args, " ").."}"
+end
+
+function BeginTag:add(child)
+  table.insert(self.children, child)
+end
+
+BeginEndTag = {}
+BeginEndTag.__index = BeginEndTag
+setmetatable(BeginEndTag, {__call = function(self, text)
+  local name, args = parsetag(text:sub(2, #text-1))
+  return setmetatable({name = name, args = args, children = {}}, BeginEndTag)
+end, __tostring = function() return "BeginEndTag" end})
+
+function BeginEndTag:__tostring()
+  return "{:"..self.name.." "..table.concat(self.args, " ").."/}"
+end
+
+function BeginEndTag:add(child)
+  print(("error: BeginEndTag cannot have children, %s"):format(tostring(self)))
+end
+
+EndTag = {}
+EndTag.__index = EndTag
+setmetatable(EndTag, {__call = function(self, text)
+  local name, args = parsetag(text:sub(2, #text))
+  if #args > 0 then
+    print(("parse error: end tags cannot have arguments, '%s'"):format(text))
+    os.exit(1)
+  end
+  return setmetatable({name = name}, EndTag)
+end, __tostring = function() return "EndTag__" end})
+
+function EndTag:__tostring()
+  return "{/"..self.name.."}"
+end
+
+VariableTag = {}
+VariableTag.__index = VariableTag
+setmetatable(VariableTag, {__call = function(self, text)
+  local name, args = parsetag(text:sub(2, #text-1))
+  if #args > 0 then
+    print(("parse error: variable tags cannot have arguments, '%s'"):format(text))
+    os.exit(1)
+  end
+  local filters = {}
+  for filter in text:gmatch("|([^ \"|]+)") do
+    table.insert(filters, filter)
+  end
+  return setmetatable({name = name:match("^[^|]+"), filters = filters}, VariableTag)
+end, __tostring = function() return "VariableTag" end})
+
+function VariableTag:__tostring()
+  return "{{"..self.name.."|"..table.concat(self.filters, "|").."}}"
+end
+
+function parsetag(str)
+  local index = 1
+  local tokens = {}
+  local name = nil
+  if not str:match("^%a[a-zA-Z0-9_-]* [^\n]*$") and
+    not str:match("^%a[a-zA-Z0-9_-|]*$") then
+    print(("parse error: tags can only be of format %%a[a-zA-Z0-9_-]*, '%s'"):format(str))
+    os.exit(1)
+  end
+  while index <= #str do
+    while str:sub(index, index) == " " do
+      index = index + 1
+    end
+    if index > #str then
+      break
+    end
+    local char = str:sub(index, index)
+    if char == '"' or char == "'" then
+      local start = index
+      local escape = true
+      while escape or str:sub(index, index) ~= char do
+        escape = false
+        if str:sub(index, index) == "\\" then
+          escape = true
+        end
+        index = index + 1
+        if index > #str then
+          print(("parse error: string not closed by quotes, '%s'"):format(str))
+          os.exit(1)
+        end
+      end
+      local text = str:sub(start+1, index-1):gsub("\\(.)", "%1")
+      table.insert(tokens, text)
+      index = index + 1
+    else
+      local token = str:sub(index):match("^[^ \"]+")
+      if name == nil then
+        name = token
+      else
+        table.insert(tokens, token)
+      end
+      index = index + #token
+    end
+  end
+  return name, tokens
+end
+
+function parseraw(str)
+  local index = 0
+  local tokens = {}
+  while true do
+    local start, finish = str:find("%b{}", index)
+    if not start then
+      local text = str:sub(index, #str)
+      if #text > 0 then
+        if getmetatable(tokens[#tokens]) == Text then
+          tokens[#tokens]:append(text)
+        else
+          table.insert(tokens, Text(text))
+        end
+      end
+      break
+    end
+    local text = str:sub(index, start-1)
+    local tag = str:sub(start, finish)
+    if not tag:match("^{[:/][a-z][a-zA-Z0-9_-]* [^\n]*}$") and 
+      not tag:match("^{[:/][a-z][a-zA-Z0-9_-]*[/]?}$") and
+      not tag:match("^{{[a-z][a-zA-Z0-9_-|]*}}$") then
+      text, tag = text .. tag, nil
+
+    end
+    if #text > 0 then
+      if getmetatable(tokens[#tokens]) == Text then
+        tokens[#tokens]:append(text)
+      else
+        table.insert(tokens, Text(text))
+      end
+    end
+    if tag then
+      table.insert(tokens, Tag(tag:sub(2, #tag-1)))
+    end
+    index = finish + 1
+  end
+  return tokens
+end
+
+function compose(tokens, begin, start, finish)
+  local start = start or 1
+  local tree, index, finish = {}, start or 1, finish or #tokens
+  begin = begin or {}
+  while index <= finish do
+    local token = tokens[index]
+    local metatable = getmetatable(token)
+
+    if metatable == EndTag then
+      local tag = table.remove(begin)
+      if tag and token.name ~= tag.name then
+        return tree, index, tag
+      end
+      return tree, index + 1, tag
+    elseif metatable == VariableTag or metatable == Text or 
+      metatable == BeginEndTag or metatable == BeginTag  then
+    else
+      io.stderr:write("parse error: unexpected token")
+      os.exit(1)
+    end
+
+    table.insert(tree, token)
+    index = index + 1
+
+    if metatable == BeginTag then
+      table.insert(begin, token)
+      local children, parent
+      children, index, parent = compose(tokens, begin, index)
+      for i, child in ipairs(children) do
+        parent:add(child)
+      end
+    end
+  end
+  return tree, index, table.remove(begin)
+end
+
+function show(tree, indent)
+  indent = indent or ""
+  for i, node in ipairs(tree) do
+    print(tostring(getmetatable(node)), indent..tostring(node):gsub("\n", "_"))
+    if node.children then
+      show(node.children, indent.."  ")
+      if #node.children == 0 then
+        print("\t", indent.."  ".."no children")
+      end
+    end
+  end
+end
+
+function javascript(str)
+  local tokens = parseraw(str)
+  show(compose(tokens), "")
+  -- for i, v in ipairs(parseraw(str)) do
+  --   print(getmetatable(v), tostring(v):gsub("%s", "_"), "")
+  -- end
+  -- print(#parseraw(str))
+end
+
+compile = {}
+compile["javascript"] = javascript
+
+function __main__()
+  local compile = compile[args.target]
+  if not compile then
+    io.stderr:write(string.format("Target language '%s' not supported.", 
+      args.target))
+    os.exit()
+  else
+    print(compile(text))
+  end
+end
+
+__main__()
+
